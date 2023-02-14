@@ -1,0 +1,3 @@
+# All TwinCAT related stuff such as *.Tc *.TcPOU *.TcDUT *.TcTLO *.TcGVL and *.TcVIS
+
+*.Tc*	@Vanrykel
