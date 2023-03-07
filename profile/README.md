@@ -15,7 +15,3 @@ De meest voorkomende **repositories waarin studenten zullen werken** zijn gebond
 | studiejaar | cursusnaam (met academiejaar) | 2EAI-**EmS**-COURSE <br> 2EAI-**EmS-2223**-Task1 <br> 3EAI-**IA-2122**-Carproduction <br> 3EAI-**IA-2122**-task1-AlexPeters |
 | Project   | technologie of domein | Project-**PLC**-AGV <br> Project-**Rpi**-SmartHome <br> Project-**Research**-Groendaken |
 | technologie | doel | tc-**demo**-dmx <br> Rpi-**workshop**-IoT <br> mtb-**psoc6**-PDL-adventures <br> mtb-**psoc4**-HAL-adventures <br> mtb-**example-psoc6**-dfu-basic |
-
-## GitHub Classrooms
-
-Let op dat het verwijderen van een classroom assigment de groepen niet automatisch verwijderd worden met het idee dat je ze hergebruikt.
