@@ -16,4 +16,4 @@ Ze staan in `.github/workflows/` van deze repo en worden afgedwongen via de rule
 
 ## Wijzigen
 
-Via pull request. Zodra die op `main` staat, geldt de wijziging **meteen** voor alle PEN/POZ-repo's. Test dus eerst in een testrepo.
+Via pull request. Zodra die op `master` staat, geldt de wijziging **meteen** voor alle PEN/POZ-repo's. Test dus eerst in een testrepo.
