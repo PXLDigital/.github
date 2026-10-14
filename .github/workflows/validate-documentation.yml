@@ -1,0 +1,187 @@
+name: Validate Documentation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: validate-documentation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  require-markdown-docs:
+    name: Require markdown documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify documentation exists
+        id: verify_docs
+        run: |
+          MD_COUNT=$(find . -name "*.md" -type f -not -path "./.git/*" -not -path "./.github/*" -not -path "*/node_modules/*" | wc -l)
+
+          if [ "$MD_COUNT" -eq 0 ]; then
+            echo "❌ GEEN markdown documentatie gevonden!"
+            echo "has_docs=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "✅ $MD_COUNT markdown bestand(en) gevonden"
+
+      - name: Comment on PR - Missing documentation
+        if: failure() && steps.verify_docs.outputs.has_docs == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- validate-documentation:missing-docs -->';
+            const body = `${marker}
+            ## ❌ Geen documentatie gevonden
+
+            Er zijn geen markdown (.md) bestanden gevonden in je repository. **Documentatie is verplicht.**
+
+            Voeg minimaal een \`README.md\` toe met:
+            - Projectbeschrijving en doel
+            - Hardware/software vereisten
+            - Installatie en gebruik instructies
+            - Auteur en licentie
+            `;
+            const issue_number = context.issue.number;
+            const { owner, repo } = context.repo;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+              const existing = comments.find(c => c.body && c.body.includes(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              }
+            } catch (e) {
+              core.warning(`Kon geen PR-comment plaatsen (bv. PR vanuit fork): ${e.message}`);
+            }
+
+  require-markdown-mention:
+    name: Require mention in markdown
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check markdown mentions in PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.info('No pull request context, exiting.');
+              return;
+            }
+            const { owner, repo } = context.repo;
+            const prNumber = pr.number;
+            const headSha = pr.head.sha;
+            const baseSha = pr.base.sha;
+            const marker = '<!-- validate-documentation:markdown-mention -->';
+
+            // Documentation assets that must be mentioned in a markdown file.
+            // Source code, config and .github/ are intentionally excluded.
+            const ASSET_EXT = /\.(pdf|stl|png|jpe?g|gif|svg|webp)$/i;
+
+            const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            async function upsertComment(body) {
+              try {
+                const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: prNumber, per_page: 100 });
+                const existing = comments.find(c => c.body && c.body.includes(marker));
+                if (existing) {
+                  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                } else {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+                }
+              } catch (e) {
+                core.warning(`Could not post PR comment (e.g. PR from a fork): ${e.message}`);
+              }
+            }
+
+            // All files in the PR (paginated, API max is 100 per page)
+            const prFiles = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: prNumber, per_page: 100 });
+
+            const assets = prFiles
+              .filter(f => f.status !== 'removed' && ASSET_EXT.test(f.filename) && !f.filename.startsWith('.github/'))
+              .map(f => f.filename);
+
+            if (assets.length === 0) {
+              core.info('No documentation assets (pdf, stl, images) added or changed.');
+              return;
+            }
+
+            const mdInPr = new Set(
+              prFiles.filter(f => f.status !== 'removed' && /\.md$/i.test(f.filename)).map(f => f.filename)
+            );
+
+            // Markdown files on the base branch that the PR does not touch
+            const mdInBase = [];
+            const treeResp = await github.rest.git.getTree({ owner, repo, tree_sha: baseSha, recursive: 'true' });
+            if (treeResp.data.truncated) {
+              core.warning('Repository tree is truncated; some markdown files on the base branch may be missed.');
+            }
+            for (const entry of treeResp.data.tree) {
+              if (entry.type === 'blob' && /\.md$/i.test(entry.path) && !mdInPr.has(entry.path)) {
+                mdInBase.push(entry);
+              }
+            }
+
+            const decode = b64 => Buffer.from(b64, 'base64').toString('utf8');
+
+            async function readAll(tasks, size = 10) {
+              const out = [];
+              for (let i = 0; i < tasks.length; i += size) {
+                out.push(...await Promise.all(tasks.slice(i, i + size).map(t => t())));
+              }
+              return out;
+            }
+
+            const contents = await readAll([
+              ...[...mdInPr].map(path => async () => {
+                try {
+                  const r = await github.rest.repos.getContent({ owner, repo, path, ref: headSha });
+                  return Array.isArray(r.data) ? '' : decode(r.data.content || '');
+                } catch (e) {
+                  core.info(`Failed reading ${path}: ${e.message}`);
+                  return '';
+                }
+              }),
+              ...mdInBase.map(entry => async () => {
+                try {
+                  const r = await github.rest.git.getBlob({ owner, repo, file_sha: entry.sha });
+                  return decode(r.data.content || '');
+                } catch (e) {
+                  core.info(`Failed reading ${entry.path}: ${e.message}`);
+                  return '';
+                }
+              })
+            ]);
+
+            // Match full path, or the exact basename not embedded in a longer file name
+            const isReferenced = filename => {
+              const base = filename.split('/').pop();
+              const candidates = [filename, base, encodeURI(filename), encodeURI(base)];
+              return contents.some(text => candidates.some(c => {
+                const re = new RegExp(`(?<![\\w.-])${escapeRe(c)}(?![\\w-])`);
+                return re.test(text);
+              }));
+            };
+
+            const missing = assets.filter(f => !isReferenced(f));
+            if (missing.length > 0) {
+              const message = [
+                'These files are not mentioned in any markdown (.md) file:',
+                ...missing.map(m => `- ${m}`),
+                '',
+                'Policy: mention every datasheet, PDF, STL or image (by filename or path) in a markdown file, e.g. `[datasheet](hardware/datasheet.pdf)`.'
+              ].join('\n');
+              await upsertComment(`${marker}\n### ❌ Markdown mention policy violation\n\n${message}`);
+              core.setFailed(message);
+            } else {
+              core.info('All added documentation assets are mentioned in a markdown file.');
+            }

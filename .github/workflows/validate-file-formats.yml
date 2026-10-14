@@ -1,0 +1,93 @@
+name: Validate File Formats
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: validate-file-formats-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  enforce-plaintext-formats:
+    name: Block non-reviewable file formats
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for non-reviewable file types in changed files
+        id: check_files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          echo "⏳ Controleren op bestandsformaten die niet in GitHub te reviewen zijn..."
+
+          ext_re='\.(docx|pptx|xlsx|doc|ppt|xls|odt|odp|ods|pages|numbers|key|rtf|zip|rar|7z|tar|gz|bz2|tnzip|tszip|tpzip|psd|ai|sketch|fig|xcf|step|stp|dwg|dxf|f3d|exe|dll|so|dylib|app|dmg|msi|deb|rpm|db|sqlite|mdb|accdb)$'
+
+          forbidden_files=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" HEAD \
+            | grep -iE "$ext_re" | grep -v '^\.github/' || true)
+
+          if [ -n "$forbidden_files" ]; then
+            echo "❌ Verboden bestanden aangetroffen:"
+            echo "$forbidden_files"
+            printf '%s\n' "$forbidden_files" > "$RUNNER_TEMP/forbidden-files.txt"
+            echo "forbidden=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ Geen verboden bestanden gevonden."
+            echo "forbidden=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on PR - Forbidden files found
+        if: steps.check_files.outputs.forbidden == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- validate-file-formats:forbidden-files -->';
+            const files = fs.readFileSync(`${process.env.RUNNER_TEMP}/forbidden-files.txt`, 'utf8').trim();
+            const body = `${marker}
+            ## ❌ Bestandsformaten die niet in GitHub te reviewen zijn
+
+            GitHub is een samenwerkingsplatform voor **reviewbare code en tekst**, geen bestandsopslag. Deze bestanden kunnen in GitHub niet getoond of gereviewed worden, dus reviewers moeten eerst pullen. Dat is niet toegestaan.
+
+            **Verboden bestanden:**
+            \`\`\`
+            ${files}
+            \`\`\`
+
+            **Wat te gebruiken:**
+            - Word/Pages → Markdown (\`.md\`)
+            - Excel/Numbers → CSV (\`.csv\`)
+            - PowerPoint → Markdown met Marp
+            - zip/rar → Gewoon de bestanden direct in de repo
+            - Design bestanden → SVG of PNG/JPG export
+            - CAD (STEP/DWG/F3D) → STL, of een PNG/PDF-export
+
+            **Toegestaan zijn WEL:** PDF, STL, afbeeldingen (PNG/JPG/SVG) en alle tekstformaten.
+
+            **Fix:** Verwijder met \`git rm <bestand>\`, converteer naar een toegestaan formaat, commit en push.
+            `;
+            const issue_number = context.issue.number;
+            const { owner, repo } = context.repo;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+              const existing = comments.find(c => c.body && c.body.includes(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              }
+            } catch (e) {
+              core.warning(`Kon geen PR-comment plaatsen (bv. PR vanuit fork): ${e.message}`);
+            }
+
+      - name: Fail if forbidden files found
+        if: steps.check_files.outputs.forbidden == 'true'
+        run: exit 1

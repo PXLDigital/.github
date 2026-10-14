@@ -1,0 +1,177 @@
+name: Validate Links
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: validate-links-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-broken-links:
+    name: Check Broken Links
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Linkinator on markdown files
+        id: linkinator
+        uses: JustinBeckwith/linkinator-action@v2
+        continue-on-error: true
+        with:
+          paths: "**/*.md"
+          recurse: true
+          verbosity: "ERROR"
+          concurrency: 10
+          timeout: 10000
+          # Alleen interne links controleren; externe sites kunnen tijdelijk down zijn
+          # en zouden anders een verplichte check laten falen.
+          skip: "^https?://|node_modules"
+
+      - name: Comment on PR - Broken links found
+        if: steps.linkinator.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- validate-links:broken-links -->';
+            const body = `${marker}
+            ## ❌ Broken links gevonden
+
+            Je documentatie bevat kapotte links. Check de workflow logs voor details.
+
+            **Veelvoorkomende oorzaken:**
+            - Bestanden bestaan niet op het aangegeven pad
+            - Hoofdlettergevoeligheid: \`Image.png\` ≠ \`image.png\`
+            - Absolute paden gebruikt in plaats van relatieve paden
+            - Verkeerde slashes: gebruik \`/\` niet \`\\\`
+
+            **Fix:** Gebruik relatieve paden zoals \`docs/file.pdf\` of \`docs/images/photo.jpg\`
+            `;
+            const issue_number = context.issue.number;
+            const { owner, repo } = context.repo;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+              const existing = comments.find(c => c.body && c.body.includes(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              }
+            } catch (e) {
+              core.warning(`Kon geen PR-comment plaatsen (bv. PR vanuit fork): ${e.message}`);
+            }
+
+      - name: Fail if linkinator failed
+        if: steps.linkinator.outcome == 'failure'
+        run: exit 1
+
+  check-disallowed-links:
+    name: Check for Disallowed Links
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changed files for absolute, blob and external media links
+        id: check_links
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "⏳ Controleren op absolute links en externe media in gewijzigde bestanden..."
+
+          report="$RUNNER_TEMP/links-report.md"
+          : > "$report"
+          failed=false
+
+          list_changed() {
+            git diff -z --name-only --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.md' '*.html' '*.htm' '*.txt'
+          }
+
+          add_section() {
+            # $1 titel, $2 uitleg, $3 gevonden regels
+            failed=true
+            echo "❌ $1"
+            echo "$3"
+            {
+              echo "### $1"
+              echo
+              echo "$2"
+              echo
+              echo '```'
+              echo "$3"
+              echo '```'
+              echo
+            } >> "$report"
+          }
+
+          repo_re=$(printf '%s' "$REPO" | sed 's/[.[\*^$()+?{|]/\\&/g')
+
+          # 1. Absolute links naar bestanden in de eigen repo (breken bij hernoemen)
+          own=$(list_changed | xargs -0 -r grep -nHiE \
+            "github\.com/${repo_re}/(blob|tree|raw)/|raw\.githubusercontent\.com/${repo_re}/" 2>/dev/null || true)
+          if [ -n "$own" ]; then
+            add_section "🔗 Absolute links naar de eigen repository" \
+              'Gebruik relatieve paden (bv. `docs/file.pdf`) in plaats van `blob`, `tree` of `raw` URLs.' "$own"
+          fi
+
+          # 2. Lokale paden (paden vanaf de repo-root zoals /docs/x.png zijn wel toegestaan)
+          local_re='\]\(([A-Za-z]:[\\/]|file://)|(href|src)="([A-Za-z]:[\\/]|file://)'
+          abs=$(list_changed | xargs -0 -r grep -nHE "$local_re" 2>/dev/null || true)
+          if [ -n "$abs" ]; then
+            add_section "📁 Lokale paden" \
+              'Paden zoals `C:\...` of `file://` werken enkel op jouw machine. Gebruik een relatief pad zoals `docs/x.pdf`.' "$abs"
+          fi
+
+          # 3. Externe links naar mediabestanden
+          media_re='https?://[^][:space:])"<>]+\.(png|jpe?g|gif|pdf|docx?)([?#][^][:space:])"<>]*)?($|[^[:alnum:]_.-])'
+          media=$(list_changed | xargs -0 -r grep -noEH "$media_re" 2>/dev/null \
+            | grep -viE "github\.com/${repo_re}/" \
+            | grep -vE '://(localhost|127\.0\.0\.1)' || true)
+          if [ -n "$media" ]; then
+            add_section "🌐 Externe links naar mediabestanden" \
+              'Download externe media (afbeeldingen, PDFs), plaats ze in de repository en link relatief.' "$media"
+          fi
+
+          if [ "$failed" = "true" ]; then
+            echo "**Waarom?** Externe media kan verdwijnen, en absolute of lokale links breken bij hernoemen of op andere machines." >> "$report"
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ Geen disallowed links gevonden."
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on PR - Disallowed links found
+        if: steps.check_links.outputs.failed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- validate-links:disallowed-links -->';
+            const report = fs.readFileSync(`${process.env.RUNNER_TEMP}/links-report.md`, 'utf8');
+            const body = `${marker}\n## ❌ Verboden links gevonden\n\n${report}`;
+            const issue_number = context.issue.number;
+            const { owner, repo } = context.repo;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+              const existing = comments.find(c => c.body && c.body.includes(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              }
+            } catch (e) {
+              core.warning(`Kon geen PR-comment plaatsen (bv. PR vanuit fork): ${e.message}`);
+            }
+
+      - name: Fail if disallowed links found
+        if: steps.check_links.outputs.failed == 'true'
+        run: exit 1

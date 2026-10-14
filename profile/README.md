@@ -2,6 +2,8 @@
 
 Maak gerust repo's en teams aan maar geef een **duidelijke naamgeving** mee en een **contributing page**. Zie eventueel bij bestaande Templates.
 
+Regels, rulesets en Classroom 50: [beleid](..\beleid.md). 
+
 ## Policy naamgeving
 
 De meest voorkomende **repositories waarin studenten zullen werken** zijn gebonden aan een trajectschijf of een projectvak.
@@ -13,13 +15,13 @@ De meest voorkomende **repositories waarin studenten zullen werken** zijn gebond
 
 ### Technische naamgevingsregel (afdwingbaar)
 
-Alle repository-namen moeten voldoen aan het patroon **`^[a-z0-9]+(-[a-z0-9]+)+$`**.
+Alle repository-namen moeten voldoen aan het patroon **`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)+$`** (organisatie-policy). Kleine letters worden aanbevolen.
 
 **Concreet betekent dit:**
 
-- Enkel **kleine letters** `a–z`, **cijfers** `0–9` en **koppeltekens** `-` zijn toegestaan
+- Enkel **letters** `a–z` / `A–Z`, **cijfers** `0–9` en **koppeltekens** `-` zijn toegestaan
 - De naam bestaat uit **minstens twee blokken**, gescheiden door `-` (bijvoorbeeld: `2eai-ems-2324-course`)
-- **Geen** spaties, **geen** underscores `_`, **geen** hoofdletters
+- **Geen** spaties en **geen** underscores `_`
 
 ### Voorbeelden geldige repository-namen
 
