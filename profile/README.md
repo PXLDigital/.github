@@ -2,7 +2,7 @@
 
 Maak gerust repo's en teams aan maar geef een **duidelijke naamgeving** mee en een **contributing page**. Zie eventueel bij bestaande Templates.
 
-Regels, rulesets en Classroom 50: [beleid](..\beleid.md). 
+Regels, rulesets en Classroom 50: [beleid](../beleid.md). 
 
 ## Policy naamgeving
 
