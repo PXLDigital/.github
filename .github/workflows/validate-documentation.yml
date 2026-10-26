@@ -167,7 +167,7 @@ jobs:
               const base = filename.split('/').pop();
               const candidates = [filename, base, encodeURI(filename), encodeURI(base)];
               return contents.some(text => candidates.some(c => {
-                const re = new RegExp(`(?<![\\w.-])${escapeRe(c)}(?![\\w-])`);
+                const re = new RegExp(`(?<![\\w.-])${escapeRe(c)}(?![\\w-])`, 'i');
                 return re.test(text);
               }));
             };
